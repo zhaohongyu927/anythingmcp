@@ -1,11 +1,11 @@
 {
   "slug": "weclapp",
   "name": "weclapp Cloud ERP",
-  "description": "Access weclapp Cloud ERP data including customers, orders, invoices, articles, and warehouse management. Popular ERP for German SMBs.",
+  "description": "Access weclapp Cloud ERP data including parties (customers/suppliers), sales orders, invoices, and articles. Popular ERP for German SMBs.",
   "region": "de",
   "category": "erp",
   "icon": "weclapp",
-  "docsUrl": "https://www.weclapp.com/api2/",
+  "docsUrl": "https://www.weclapp.com/api/",
   "requiredEnvVars": [
     "WECLAPP_TENANT",
     "WECLAPP_API_TOKEN"
@@ -13,7 +13,7 @@
   "connector": {
     "name": "weclapp ERP",
     "type": "REST",
-    "baseUrl": "https://{{WECLAPP_TENANT}}.weclapp.com/webapp/api/v1",
+    "baseUrl": "https://{{WECLAPP_TENANT}}.weclapp.com/webapp/api/v2",
     "authType": "API_KEY",
     "authConfig": {
       "headerName": "AuthenticationToken",
@@ -23,62 +23,89 @@
   "tools": [
     {
       "name": "weclapp_list_customers",
-      "description": "List customers from weclapp ERP. Returns customer names, IDs, contact info, and customer numbers.",
+      "description": "List parties (customers/suppliers/contacts) from weclapp ERP. In API v2 customers and suppliers are unified under /party — pass filter='customerNumber-notnull=true' to restrict to customers, or filter='supplierNumber-notnull=true' for suppliers. Use `properties` to limit returned fields (e.g. 'id,customerNumber,company,firstName,lastName,email') to reduce payload size.",
       "parameters": {
         "type": "object",
         "properties": {
           "page": {
             "type": "number",
-            "description": "Page number (default: 1)"
+            "description": "Page number (1-based)"
           },
           "pageSize": {
             "type": "number",
-            "description": "Results per page (default: 25, max: 100)"
+            "description": "Results per page (default: 100, max: 1000)"
+          },
+          "properties": {
+            "type": "string",
+            "description": "Comma-separated list of fields to return, e.g. 'id,customerNumber,company,firstName,lastName,email'"
+          },
+          "filter": {
+            "type": "string",
+            "description": "weclapp v2 filter expression, e.g. 'customerNumber-notnull=true' or 'partyType-eq=ORGANIZATION'"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sort field, prefix with '-' for descending (e.g. '-createdDate')"
           }
         }
       },
       "endpointMapping": {
         "method": "GET",
-        "path": "/customer",
+        "path": "/party",
         "queryParams": {
           "page": "$page",
-          "pageSize": "$pageSize"
+          "pageSize": "$pageSize",
+          "properties": "$properties",
+          "filter": "$filter",
+          "sort": "$sort"
         }
       }
     },
     {
       "name": "weclapp_get_customer",
-      "description": "Get detailed information about a specific customer by ID.",
+      "description": "Get a specific party (customer/supplier/contact) by ID. In API v2 this maps to /party/id/{id}.",
       "parameters": {
         "type": "object",
         "properties": {
-          "customerId": {
+          "partyId": {
             "type": "string",
-            "description": "The weclapp customer ID"
+            "description": "The weclapp party ID (numeric string)"
           }
         },
         "required": [
-          "customerId"
+          "partyId"
         ]
       },
       "endpointMapping": {
         "method": "GET",
-        "path": "/customer/id/{customerId}"
+        "path": "/party/id/{partyId}"
       }
     },
     {
       "name": "weclapp_list_sales_orders",
-      "description": "List sales orders from weclapp ERP. Returns order numbers, customer info, amounts, and status.",
+      "description": "List sales orders from weclapp ERP. Returns order numbers, customer info, amounts, and status. Use `properties` to limit fields and `filter` to narrow results (e.g. 'orderNumber-eq=SO-1042').",
       "parameters": {
         "type": "object",
         "properties": {
           "page": {
             "type": "number",
-            "description": "Page number (default: 1)"
+            "description": "Page number (1-based)"
           },
           "pageSize": {
             "type": "number",
-            "description": "Results per page (default: 25, max: 100)"
+            "description": "Results per page (default: 100, max: 1000)"
+          },
+          "properties": {
+            "type": "string",
+            "description": "Comma-separated list of fields to return"
+          },
+          "filter": {
+            "type": "string",
+            "description": "weclapp v2 filter expression (e.g. 'status-eq=ORDER_ENTRY_IN_PROGRESS')"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sort field, prefix with '-' for descending"
           }
         }
       },
@@ -87,23 +114,38 @@
         "path": "/salesOrder",
         "queryParams": {
           "page": "$page",
-          "pageSize": "$pageSize"
+          "pageSize": "$pageSize",
+          "properties": "$properties",
+          "filter": "$filter",
+          "sort": "$sort"
         }
       }
     },
     {
       "name": "weclapp_list_invoices",
-      "description": "List invoices from weclapp ERP. Returns invoice numbers, amounts, due dates, and payment status.",
+      "description": "List sales invoices from weclapp ERP. Returns invoice numbers, amounts, due dates, and payment status. Use `filter` for queries like 'paid-eq=false' or 'invoiceDate-gt=2026-01-01'.",
       "parameters": {
         "type": "object",
         "properties": {
           "page": {
             "type": "number",
-            "description": "Page number (default: 1)"
+            "description": "Page number (1-based)"
           },
           "pageSize": {
             "type": "number",
-            "description": "Results per page (default: 25, max: 100)"
+            "description": "Results per page (default: 100, max: 1000)"
+          },
+          "properties": {
+            "type": "string",
+            "description": "Comma-separated list of fields to return"
+          },
+          "filter": {
+            "type": "string",
+            "description": "weclapp v2 filter expression"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sort field, prefix with '-' for descending"
           }
         }
       },
@@ -112,23 +154,38 @@
         "path": "/salesInvoice",
         "queryParams": {
           "page": "$page",
-          "pageSize": "$pageSize"
+          "pageSize": "$pageSize",
+          "properties": "$properties",
+          "filter": "$filter",
+          "sort": "$sort"
         }
       }
     },
     {
       "name": "weclapp_list_articles",
-      "description": "List articles (products) from weclapp ERP. Returns article numbers, names, prices, and stock levels.",
+      "description": "List articles (products) from weclapp ERP. Returns article numbers, names, prices, and stock info. Use `filter` like 'articleNumber-eq=ABC123' for SKU lookups.",
       "parameters": {
         "type": "object",
         "properties": {
           "page": {
             "type": "number",
-            "description": "Page number (default: 1)"
+            "description": "Page number (1-based)"
           },
           "pageSize": {
             "type": "number",
-            "description": "Results per page (default: 25, max: 100)"
+            "description": "Results per page (default: 100, max: 1000)"
+          },
+          "properties": {
+            "type": "string",
+            "description": "Comma-separated list of fields to return"
+          },
+          "filter": {
+            "type": "string",
+            "description": "weclapp v2 filter expression"
+          },
+          "sort": {
+            "type": "string",
+            "description": "Sort field, prefix with '-' for descending"
           }
         }
       },
@@ -137,19 +194,22 @@
         "path": "/article",
         "queryParams": {
           "page": "$page",
-          "pageSize": "$pageSize"
+          "pageSize": "$pageSize",
+          "properties": "$properties",
+          "filter": "$filter",
+          "sort": "$sort"
         }
       }
     },
     {
       "name": "weclapp_get_article",
-      "description": "Get detailed information about a specific article (product) by ID, including stock, pricing, and warehouse data.",
+      "description": "Get a specific article (product) by ID, including stock, pricing, and warehouse data.",
       "parameters": {
         "type": "object",
         "properties": {
           "articleId": {
             "type": "string",
-            "description": "The weclapp article ID"
+            "description": "The weclapp article ID (numeric string)"
           }
         },
         "required": [
