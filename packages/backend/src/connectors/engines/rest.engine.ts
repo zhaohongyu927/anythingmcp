@@ -1,5 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
-import axios, { AxiosRequestConfig, AxiosError, Method } from 'axios';
+import axios, {
+  AxiosRequestConfig,
+  AxiosResponse,
+  AxiosError,
+  Method,
+} from 'axios';
 import FormData from 'form-data';
 import { createUnblockerProxyAgent } from './unblocker-proxy-agent';
 import { buildOAuth1Header } from './oauth1-signer';
@@ -186,7 +191,7 @@ export class RestEngine {
     }
 
     try {
-      const response = await axios(axiosConfig);
+      const response = await this.requestWithRetry(axiosConfig);
       return response.data;
     } catch (error) {
       // OAuth2 auto-refresh: retry once on 401
@@ -229,6 +234,41 @@ export class RestEngine {
         return retryResponse.data;
       }
       throw error;
+    }
+  }
+
+  /**
+   * Whether an error is a transient failure worth retrying. We only retry on
+   * signals that strongly imply the origin did NOT process the request:
+   * 429/502/503/504 responses, or connection-level failures with no response.
+   * This keeps non-idempotent writes safe (a 500 is never retried).
+   */
+  private isTransientError(error: unknown): boolean {
+    if (!(error instanceof AxiosError)) return false;
+    const status = error.response?.status;
+    if (status) return [429, 502, 503, 504].includes(status);
+    return ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ECONNABORTED'].includes(
+      error.code ?? '',
+    );
+  }
+
+  /** Execute the request with a small bounded backoff on transient errors. */
+  private async requestWithRetry(
+    axiosConfig: AxiosRequestConfig,
+  ): Promise<AxiosResponse> {
+    const delaysMs = [300, 900];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await axios(axiosConfig);
+      } catch (error) {
+        if (attempt >= delaysMs.length || !this.isTransientError(error)) {
+          throw error;
+        }
+        this.logger.debug(
+          `Transient error (attempt ${attempt + 1}), retrying in ${delaysMs[attempt]}ms`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delaysMs[attempt]));
+      }
     }
   }
 
