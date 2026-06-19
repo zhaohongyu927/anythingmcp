@@ -10,6 +10,10 @@ import Database from 'better-sqlite3';
 export class DatabaseEngine {
   private readonly logger = new Logger(DatabaseEngine.name);
   private readonly MAX_ROWS = 1000;
+  // Upper bound on an incoming SQL string. The query is untrusted; capping its
+  // length bounds the read-only lexical scan below (no unbounded work on a
+  // hostile, oversized payload). 100k chars is far beyond any real analytics query.
+  private readonly MAX_QUERY_LENGTH = 100_000;
 
   async execute(
     config: {
@@ -606,33 +610,100 @@ export class DatabaseEngine {
     return { rows, totalRows: rows.length };
   }
 
-  private validateQuery(sql: string): void {
-    const normalized = sql.trim().toUpperCase();
-
-    if (!normalized.startsWith('SELECT')) {
+  /**
+   * Remove string literals and comments so the read-only lexical checks below
+   * can't be fooled (e.g. `WHERE note = 'a;b'`) nor trip over harmless keyword
+   * substrings inside literals (e.g. `WHERE action = 'DELETE'`).
+   *
+   * Done as a single linear character scan rather than regex: a regex for
+   * unterminated block comments backtracks in polynomial time on hostile input
+   * (`/*a/*a/*…`), and the query string is fully untrusted.
+   */
+  private stripLiteralsAndComments(sql: string): string {
+    if (sql.length > this.MAX_QUERY_LENGTH) {
       throw new Error(
-        'Only SELECT queries are allowed. INSERT, UPDATE, DELETE, DROP, and other write operations are blocked.',
+        `Query too long (${sql.length} chars; max ${this.MAX_QUERY_LENGTH}).`,
+      );
+    }
+    let out = '';
+    let i = 0;
+    const n = Math.min(sql.length, this.MAX_QUERY_LENGTH);
+    while (i < n) {
+      const c = sql[i];
+      const next = sql[i + 1];
+
+      // Line comment: -- … end of line
+      if (c === '-' && next === '-') {
+        i += 2;
+        while (i < n && sql[i] !== '\n') i++;
+        out += ' ';
+        continue;
+      }
+
+      // Block comment: /* … */ (an unterminated one runs to end of input)
+      if (c === '/' && next === '*') {
+        i += 2;
+        while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++;
+        i += 2;
+        out += ' ';
+        continue;
+      }
+
+      // Single-quoted string with '' escape → collapse to an empty literal
+      if (c === "'") {
+        i++;
+        while (i < n) {
+          if (sql[i] === "'") {
+            if (sql[i + 1] === "'") {
+              i += 2;
+              continue;
+            }
+            i++;
+            break;
+          }
+          i++;
+        }
+        out += "''";
+        continue;
+      }
+
+      out += c;
+      i++;
+    }
+    return out;
+  }
+
+  private validateQuery(sql: string): void {
+    const normalized = this.stripLiteralsAndComments(sql).trim().toUpperCase();
+
+    // Read-only entry points: a plain SELECT, or a WITH (CTE) that ultimately
+    // selects. Common Table Expressions are a legitimate read-only construct
+    // (`WITH q AS (SELECT …) SELECT … FROM q`) and were previously rejected.
+    if (!normalized.startsWith('SELECT') && !normalized.startsWith('WITH')) {
+      throw new Error(
+        'Only SELECT queries are allowed (a leading WITH … SELECT CTE is also accepted). INSERT, UPDATE, DELETE, DROP, and other write operations are blocked.',
       );
     }
 
-    const blocked = [
-      'INSERT',
-      'UPDATE',
-      'DELETE',
-      'DROP',
-      'TRUNCATE',
-      'ALTER',
-      'CREATE',
-      'EXEC',
-      'EXECUTE',
-      'GRANT',
-      'REVOKE',
-    ];
-    for (const keyword of blocked) {
-      const regex = new RegExp(`\\b${keyword}\\b`, 'i');
-      if (regex.test(sql) && !normalized.startsWith('SELECT')) {
-        throw new Error(`Blocked SQL keyword: ${keyword}`);
-      }
+    // Reject stacked statements (e.g. "SELECT 1; DROP TABLE x"). A single
+    // trailing semicolon is tolerated; anything after it is not.
+    if (normalized.replace(/;\s*$/, '').includes(';')) {
+      throw new Error(
+        'Only a single SQL statement is allowed; stacked statements are blocked.',
+      );
+    }
+
+    // Postgres allows data-modifying CTEs — `WITH x AS (INSERT … RETURNING …)
+    // SELECT …`. Those write despite the leading WITH, so block any write
+    // keyword that opens a CTE body. Matching `(\s*<keyword>` keeps this from
+    // flagging ordinary identifiers (`created_at`) or read-only subqueries.
+    const dataModifyingCte =
+      /\(\s*(INSERT|UPDATE|DELETE|MERGE|DROP|TRUNCATE|ALTER|CREATE|GRANT|REVOKE)\b/;
+    const cteMatch = normalized.match(dataModifyingCte);
+    if (cteMatch) {
+      throw new Error(
+        `Blocked SQL keyword in CTE: ${cteMatch[1]}. Only read-only queries are allowed.`,
+      );
     }
   }
 
