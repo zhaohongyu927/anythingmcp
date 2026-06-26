@@ -20,8 +20,13 @@ ARG NODE_VERSION=26-alpine
 FROM node:${NODE_VERSION} AS deps
 RUN apk add --no-cache libc6-compat python3 make g++
 
-ARG NPM_REGISTRY=https://registry.npmmirror.com
-RUN npm config set registry ${NPM_REGISTRY}
+# 容器内强制UTF8编码，修复arm64 QEMU字符解析bug
+ENV LANG=en_US.UTF-8
+ENV LC_ALL=en_US.UTF-8
+
+# 构建前清理所有文件Windows回车换行，兜底修复
+RUN apt-get update && apt-get install -y dos2unix && \
+    find /app -type f -exec dos2unix {} \;
 
 WORKDIR /app
 
