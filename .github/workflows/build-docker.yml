@@ -1,32 +1,46 @@
 name: Build Multi-Arch Docker Image (amd64/arm64)
 
-# 触发条件：main分支推送、手动触发构建
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # 支持页面手动点按钮构建
+  workflow_dispatch:
 
 env:
   GHCR_REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }} # 自动填充 用户名/anythingmcp
+  IMAGE_NAME: ${{ github.repository }}
+  # 全局强制UTF8编码
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
 
 jobs:
   build-push:
     runs-on: ubuntu-latest
     steps:
-      # 1. 拉取源码
       - name: Checkout source code
         uses: actions/checkout@v4
+        with:
+          # 强制检出LF换行，禁止自动CRLF转换
+          line-ending: lf
 
-      # 2. 配置QEMU，支持arm64跨架构编译
+      # 新增：统一清理所有文件回车符，彻底杜绝\r乱码
+      - name: Fix file line endings & remove CR
+        run: |
+          sudo apt install -y dos2unix
+          find . -type f -exec dos2unix {} \;
+
+      # 强制构建环境UTF8，避免QEMU字符解析错乱
+      - name: Set UTF-8 locale
+        run: |
+          sudo locale-gen en_US.UTF-8
+          echo "LANG=en_US.UTF-8" >> /etc/environment
+          echo "LC_ALL=en_US.UTF-8" >> /etc/environment
+
       - name: Set up QEMU multiarch
         uses: docker/setup-qemu-action@v3
 
-      # 3. 初始化buildx多架构构建器
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 4. 登录GHCR容器仓库
       - name: Login to GHCR
         uses: docker/login-action@v3
         with:
@@ -34,17 +48,18 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GHCR_TOKEN }}
 
-      # 5. 构建并推送双架构镜像
       - name: Build & Push Image
         uses: docker/build-push-action@v6
         with:
           context: .
-          # 同时构建x86_64和arm64架构
           platforms: linux/amd64,linux/arm64
           push: true
           tags: |
             ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}:latest
             ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          # 国内npm镜像加速编译，解决ARM下npm安装卡死
           build-args:
             NPM_REGISTRY=https://registry.npmmirror.com
+          # 容器内构建阶段也强制UTF8
+          env:
+            LANG: en_US.UTF-8
+            LC_ALL: en_US.UTF-8
