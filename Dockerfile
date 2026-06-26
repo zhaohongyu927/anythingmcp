@@ -19,6 +19,10 @@ ARG NODE_VERSION=26-alpine
 # ── Stage 1: Install ALL dependencies ───────────────────────────────────────
 FROM node:${NODE_VERSION} AS deps
 RUN apk add --no-cache libc6-compat python3 make g++
+
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+RUN npm config set registry ${NPM_REGISTRY}
+
 WORKDIR /app
 
 # Copy root package files for workspace resolution
